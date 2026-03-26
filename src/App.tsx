@@ -4,20 +4,38 @@
  */
 
 import { motion, AnimatePresence } from "motion/react";
-import { LogOut, Sun, QrCode, ScanLine, Wallet, X, ArrowLeft, DollarSign, Zap } from "lucide-react";
-import { useState, useEffect } from "react";
+import { LogOut, Sun, QrCode, ScanLine, Wallet, X, ArrowLeft, DollarSign, Zap, History, ChevronRight, Plus, Trash2, Check } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "./firebase";
 import { QRCodeCanvas } from "qrcode.react";
-import { QrReader } from "@blackbox-vision/react-qr-reader";
+import { Html5Qrcode } from "html5-qrcode";
 
 const MERCHANT_WALLET = "HHQh2MtxehN9wQptR5oXSiEPSVe1eLjPiqJhKF6Z1WzJ";
 const SOL_PRICE_USD = 150; // Mock price for conversion
 
+interface Transaction {
+  id: string;
+  type: 'send' | 'receive';
+  amount: string;
+  currency: 'SOL' | 'USD';
+  date: string;
+  address: string;
+}
+
+const MOCK_TRANSACTIONS: Transaction[] = [
+  { id: '1', type: 'receive', amount: '0.5', currency: 'SOL', date: '2026-03-25 14:30', address: '8x...2y' },
+  { id: '2', type: 'send', amount: '15.00', currency: 'USD', date: '2026-03-24 09:15', address: '3a...9k' },
+  { id: '3', type: 'receive', amount: '1.2', currency: 'SOL', date: '2026-03-23 18:45', address: 'HH...zJ' },
+];
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletAddress, setWalletAddress] = useState<string | null>(() => {
+    return localStorage.getItem("sollar_wallet");
+  });
   const [activeView, setActiveView] = useState<"dashboard" | "request" | "scan">("dashboard");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
   // Request Payment State
   const [amount, setAmount] = useState("");
@@ -30,6 +48,85 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (walletAddress) {
+      localStorage.setItem("sollar_wallet", walletAddress);
+    } else {
+      localStorage.removeItem("sollar_wallet");
+    }
+  }, [walletAddress]);
+
+  const [linkedWallets, setLinkedWallets] = useState<string[]>(() => {
+    const saved = localStorage.getItem("sollar_linked_wallets");
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem("sollar_linked_wallets", JSON.stringify(linkedWallets));
+  }, [linkedWallets]);
+
+  const scannerInstanceRef = useRef<Html5Qrcode | null>(null);
+  const [scannerError, setScannerError] = useState<string | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+
+  // QR Scanner Logic
+  useEffect(() => {
+    if (activeView === "scan") {
+      setScannerError(null);
+      setIsScanning(false);
+      
+      const timer = setTimeout(async () => {
+        const element = document.getElementById("reader");
+        if (!element) {
+          setScannerError("Camera container not found.");
+          return;
+        }
+
+        try {
+          const html5QrCode = new Html5Qrcode("reader");
+          scannerInstanceRef.current = html5QrCode;
+
+          const config = { 
+            fps: 10, 
+            aspectRatio: 1.0
+          };
+
+          // Try to start with environment camera (back camera)
+          await html5QrCode.start(
+            { facingMode: "environment" },
+            config,
+            (decodedText) => {
+              if (decodedText.toLowerCase().includes("solana:")) {
+                html5QrCode.stop().then(() => {
+                  window.location.href = decodedText;
+                }).catch(console.error);
+              }
+            },
+            (errorMessage) => {
+              // Ignore common scan errors
+            }
+          );
+          setIsScanning(true);
+        } catch (err: any) {
+          console.error("Failed to start camera:", err);
+          if (err?.message?.includes("Permission denied")) {
+            setScannerError("Camera permission denied. Please enable it in settings.");
+          } else {
+            setScannerError("No camera found or access restricted.");
+          }
+        }
+      }, 600);
+
+      return () => {
+        clearTimeout(timer);
+        if (scannerInstanceRef.current && scannerInstanceRef.current.isScanning) {
+          scannerInstanceRef.current.stop().catch(() => {});
+        }
+      };
+    }
+  }, [activeView]);
 
   const handleLogin = async () => {
     try {
@@ -44,14 +141,26 @@ export default function App() {
       await signOut(auth);
       setWalletAddress(null);
       setActiveView("dashboard");
+      setIsSidebarOpen(false);
     } catch (error) {
       console.error("Logout failed:", error);
     }
   };
 
   const handleLinkWallet = () => {
-    // For now, link the requested wallet address
+    if (!linkedWallets.includes(MERCHANT_WALLET)) {
+      setLinkedWallets(prev => [...prev, MERCHANT_WALLET]);
+    }
     setWalletAddress(MERCHANT_WALLET);
+    setIsWalletModalOpen(false);
+  };
+
+  const handleRemoveWallet = (addr: string) => {
+    const updated = linkedWallets.filter(w => w !== addr);
+    setLinkedWallets(updated);
+    if (walletAddress === addr) {
+      setWalletAddress(updated.length > 0 ? updated[0] : null);
+    }
   };
 
   const getSolAmount = () => {
@@ -62,7 +171,7 @@ export default function App() {
 
   const generateSolanaPayUrl = () => {
     const solAmount = getSolAmount();
-    return `solana:${MERCHANT_WALLET}?amount=${solAmount}&label=Sollar%20Payment&message=Thanks%20for%20using%20Sollar`;
+    return `solana:${walletAddress || MERCHANT_WALLET}?amount=${solAmount}&label=Sollar%20Payment&message=Thanks%20for%20using%20Sollar`;
   };
 
   if (loading) {
@@ -104,10 +213,168 @@ export default function App() {
         ) : (
           <motion.div key="app" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex-1 flex flex-col h-screen relative">
             
+            {/* Sidebar Overlay */}
+            <AnimatePresence>
+              {isSidebarOpen && (
+                <>
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setIsSidebarOpen(false)}
+                    className="absolute inset-0 bg-black/20 backdrop-blur-sm z-40"
+                  />
+                  <motion.div
+                    initial={{ x: "-100%" }}
+                    animate={{ x: 0 }}
+                    exit={{ x: "-100%" }}
+                    transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                    className="absolute top-0 left-0 bottom-0 w-80 bg-white z-50 shadow-2xl p-6 flex flex-col"
+                  >
+                    <div className="flex justify-between items-center mb-8">
+                      <div className="flex items-center space-x-2">
+                        <History className="text-yellow-400 w-6 h-6" />
+                        <h2 className="text-xl font-light tracking-tight">History</h2>
+                      </div>
+                      <button onClick={() => setIsSidebarOpen(false)} className="p-2 hover:bg-yellow-50 rounded-full transition-colors">
+                        <X size={20} className="text-gray-400" />
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                      {MOCK_TRANSACTIONS.map((tx) => (
+                        <div key={tx.id} className="p-4 rounded-2xl bg-yellow-50/50 border border-yellow-100 flex items-center justify-between group hover:bg-yellow-50 transition-colors">
+                          <div className="flex items-center space-x-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${tx.type === 'receive' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                              {tx.type === 'receive' ? <ArrowLeft size={18} className="rotate-45" /> : <ArrowLeft size={18} className="rotate-[225deg]" />}
+                            </div>
+                            <div>
+                              <p className="text-sm font-medium text-gray-900 capitalize">{tx.type}</p>
+                              <p className="text-[10px] text-gray-400 font-mono">{tx.address}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className={`text-sm font-medium ${tx.type === 'receive' ? 'text-green-600' : 'text-red-600'}`}>
+                              {tx.type === 'receive' ? '+' : '-'}{tx.amount} {tx.currency}
+                            </p>
+                            <p className="text-[10px] text-gray-400">{tx.date}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-6 pt-6 border-t border-yellow-50 flex items-center space-x-3">
+                      <img src={user.photoURL || ""} alt="User" className="w-8 h-8 rounded-full border border-yellow-100" referrerPolicy="no-referrer" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{user.displayName}</p>
+                        <p className="text-xs text-gray-400 truncate">{user.email}</p>
+                      </div>
+                      <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-500 transition-colors">
+                        <LogOut size={18} />
+                      </button>
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+
+            {/* Wallet Modal */}
+            <AnimatePresence>
+              {isWalletModalOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setIsWalletModalOpen(false)}
+                    className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                    className="relative w-full max-w-sm bg-white rounded-[32px] shadow-2xl overflow-hidden"
+                  >
+                    <div className="p-8">
+                      <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-light text-gray-900">Wallets</h2>
+                        <button onClick={() => setIsWalletModalOpen(false)} className="p-2 hover:bg-yellow-50 rounded-full transition-colors">
+                          <X size={20} className="text-gray-400" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 mb-8 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                        {linkedWallets.length === 0 ? (
+                          <div className="text-center py-8 px-4 bg-yellow-50/50 rounded-2xl border border-dashed border-yellow-200">
+                            <Wallet className="text-yellow-300 w-10 h-10 mx-auto mb-3" />
+                            <p className="text-sm text-gray-500">No wallets linked yet</p>
+                          </div>
+                        ) : (
+                          linkedWallets.map((addr) => (
+                            <div 
+                              key={addr}
+                              onClick={() => setWalletAddress(addr)}
+                              className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between group ${walletAddress === addr ? 'border-yellow-400 bg-yellow-50' : 'border-yellow-50 bg-white hover:border-yellow-200'}`}
+                            >
+                              <div className="flex items-center space-x-3">
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${walletAddress === addr ? 'bg-yellow-400 text-white' : 'bg-yellow-100 text-yellow-600'}`}>
+                                  <Zap size={14} />
+                                </div>
+                                <span className="text-sm font-mono text-gray-600">
+                                  {addr.slice(0, 6)}...{addr.slice(-6)}
+                                </span>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                {walletAddress === addr && <Check size={18} className="text-yellow-500" />}
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveWallet(addr);
+                                  }}
+                                  className="p-1.5 text-gray-300 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <button
+                        onClick={handleLinkWallet}
+                        className="w-full py-4 bg-yellow-400 text-white font-medium rounded-2xl shadow-lg shadow-yellow-100 hover:bg-yellow-500 transition-all flex items-center justify-center space-x-2 active:scale-[0.98]"
+                      >
+                        <Plus size={20} />
+                        <span>Link New Wallet</span>
+                      </button>
+                      
+                      {walletAddress && (
+                        <button
+                          onClick={() => {
+                            setWalletAddress(null);
+                            setIsWalletModalOpen(false);
+                          }}
+                          className="w-full mt-3 py-3 text-sm text-gray-400 hover:text-red-500 transition-colors font-medium"
+                        >
+                          Disconnect Current
+                        </button>
+                      )}
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
+
             {/* App Bar */}
             <header className="absolute top-0 left-0 right-0 z-30 p-6 flex justify-between items-center bg-white/80 backdrop-blur-md border-b border-yellow-50">
-              <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveView("dashboard")}>
-                <Sun className="text-yellow-400 w-6 h-6" />
+              <div 
+                className="flex items-center space-x-2 cursor-pointer group" 
+                onClick={() => setIsSidebarOpen(true)}
+              >
+                <div className="relative p-2 bg-yellow-50 rounded-xl border border-yellow-100 group-hover:bg-yellow-100 transition-colors">
+                  <Sun className="text-yellow-500 w-6 h-6 group-hover:rotate-45 transition-transform duration-500" />
+                </div>
                 <span className="text-xl font-light tracking-tight text-gray-900">Sollar</span>
               </div>
               
@@ -115,14 +382,17 @@ export default function App() {
                 {!walletAddress ? (
                   <motion.button
                     whileTap={{ scale: 0.95 }}
-                    onClick={handleLinkWallet}
+                    onClick={() => setIsWalletModalOpen(true)}
                     className="px-4 py-2 bg-yellow-400 text-white rounded-full text-sm font-medium shadow-sm hover:bg-yellow-500 transition-all flex items-center space-x-2"
                   >
                     <Wallet size={16} />
                     <span>Link Wallet</span>
                   </motion.button>
                 ) : (
-                  <div className="flex items-center space-x-2 px-3 py-1.5 bg-yellow-50 border border-yellow-100 rounded-full">
+                  <div 
+                    onClick={() => setIsWalletModalOpen(true)}
+                    className="flex items-center space-x-2 px-3 py-1.5 bg-yellow-50 border border-yellow-100 rounded-full cursor-pointer hover:bg-yellow-100 transition-colors"
+                  >
                     <Zap className="text-yellow-500 w-4 h-4" />
                     <span className="text-xs font-mono text-yellow-700">
                       {walletAddress.slice(0, 4)}...{walletAddress.slice(-4)}
@@ -236,36 +506,83 @@ export default function App() {
                     initial={{ opacity: 0, x: 100 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -100 }}
-                    className="flex-1 flex flex-col items-center justify-center p-8 bg-gray-900"
+                    className="flex-1 flex flex-col items-center p-8 bg-white"
                   >
-                    <button onClick={() => setActiveView("dashboard")} className="absolute top-28 left-8 flex items-center space-x-2 text-white/60 hover:text-white transition-colors z-10">
+                    <button 
+                      onClick={() => setActiveView("dashboard")} 
+                      className="absolute top-28 left-8 flex items-center space-x-2 text-gray-400 hover:text-gray-600 transition-colors z-10"
+                    >
                       <ArrowLeft size={20} />
                       <span>Back</span>
                     </button>
 
-                    <div className="w-full max-w-sm aspect-square relative rounded-3xl overflow-hidden border-4 border-yellow-400 shadow-2xl shadow-yellow-400/20">
-                      <QrReader
-                        onResult={(result, error) => {
-                          if (result) {
-                            const text = result.getText();
-                            if (text.startsWith("solana:")) {
-                              window.location.href = text; // Deeplink to wallet
-                            }
-                          }
-                        }}
-                        constraints={{ facingMode: "environment" }}
-                        containerStyle={{ width: "100%", height: "100%" }}
-                        videoStyle={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      />
-                      <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none">
-                        <div className="w-full h-full border-2 border-yellow-400/50 rounded-xl" />
-                      </div>
-                      <div className="absolute bottom-8 left-0 right-0 text-center">
-                        <p className="text-white text-sm font-light bg-black/40 backdrop-blur-md py-2 px-4 rounded-full inline-block">
-                          Align QR code within frame
-                        </p>
+                    <div className="flex-1 flex flex-col items-center justify-center w-full">
+                      <div className={`w-full max-w-sm aspect-square relative rounded-[40px] overflow-hidden transition-all duration-500 ${isScanning ? 'shadow-2xl shadow-yellow-400/10 bg-gray-900' : 'bg-white'}`}>
+                        <div id="reader" className="w-full h-full scale-110"></div>
+                        
+                        {scannerError && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-white z-20">
+                            <div className="flex-1 flex flex-col items-center justify-center">
+                              <Zap className="text-yellow-400 w-12 h-12 mb-4 opacity-20" />
+                              <p className="text-gray-400 font-light text-sm max-w-[200px]">{scannerError}</p>
+                            </div>
+                            <button 
+                              onClick={() => setActiveView("dashboard")}
+                              className="w-full py-4 bg-yellow-400 text-white rounded-2xl text-sm font-medium shadow-lg shadow-yellow-100 active:scale-95 transition-all"
+                            >
+                              Return to Dashboard
+                            </button>
+                          </div>
+                        )}
+
+                        {!scannerError && !isScanning && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center bg-white z-10">
+                            <motion.div
+                              animate={{ scale: [1, 1.1, 1] }}
+                              transition={{ duration: 2, repeat: Infinity }}
+                            >
+                              <Zap className="text-yellow-400 w-8 h-8 mb-4" />
+                            </motion.div>
+                            <p className="text-gray-400 text-xs tracking-widest uppercase">Initializing</p>
+                          </div>
+                        )}
+
+                        {isScanning && (
+                          <div className="absolute inset-0 pointer-events-none">
+                            <div className="absolute inset-12">
+                              {/* Top Left */}
+                              <div className="absolute top-0 left-0 w-10 h-10 border-t-[3px] border-l-[3px] border-yellow-400 rounded-tl-3xl" />
+                              {/* Top Right */}
+                              <div className="absolute top-0 right-0 w-10 h-10 border-t-[3px] border-r-[3px] border-yellow-400 rounded-tr-3xl" />
+                              {/* Bottom Left */}
+                              <div className="absolute bottom-0 left-0 w-10 h-10 border-b-[3px] border-l-[3px] border-yellow-400 rounded-bl-3xl" />
+                              {/* Bottom Right */}
+                              <div className="absolute bottom-0 right-0 w-10 h-10 border-b-[3px] border-r-[3px] border-yellow-400 rounded-br-3xl" />
+                              
+                              {/* Scanning Line Animation */}
+                              <motion.div 
+                                initial={{ top: "0%" }}
+                                animate={{ top: "100%" }}
+                                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                                className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-yellow-400/50 to-transparent z-10"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
+
+                    {isScanning && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="py-8"
+                      >
+                        <p className="text-gray-400 text-[10px] uppercase tracking-[0.3em] font-medium">
+                          Scanning for QR Code
+                        </p>
+                      </motion.div>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
