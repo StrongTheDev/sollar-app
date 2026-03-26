@@ -5,10 +5,20 @@
 
 import { motion, AnimatePresence } from "motion/react";
 import { LogOut, Sun, QrCode, ScanLine, Wallet, X, ArrowLeft, DollarSign, Zap, History, ChevronRight, Plus, Trash2, Check } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, User } from "./firebase";
 import { QRCodeCanvas } from "qrcode.react";
 import { Html5Qrcode } from "html5-qrcode";
+
+// Solana Wallet Adapter Imports
+import { ConnectionProvider, WalletProvider, useWallet } from '@solana/wallet-adapter-react';
+import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
+import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
+import { WalletModalProvider, WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { clusterApiUrl } from '@solana/web3.js';
+
+// Default styles that can be overridden by your app
+import '@solana/wallet-adapter-react-ui/styles.css';
 
 const MERCHANT_WALLET = "HHQh2MtxehN9wQptR5oXSiEPSVe1eLjPiqJhKF6Z1WzJ";
 const SOL_PRICE_USD = 150; // Mock price for conversion
@@ -28,7 +38,7 @@ const MOCK_TRANSACTIONS: Transaction[] = [
   { id: '3', type: 'receive', amount: '1.2', currency: 'SOL', date: '2026-03-23 18:45', address: 'HH...zJ' },
 ];
 
-export default function App() {
+export function SollarApp() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [walletAddress, setWalletAddress] = useState<string | null>(() => {
@@ -37,6 +47,24 @@ export default function App() {
   const [activeView, setActiveView] = useState<"dashboard" | "request" | "scan">("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
+  // Solana Wallet Adapter
+  const { publicKey, disconnect } = useWallet();
+
+  const [linkedWallets, setLinkedWallets] = useState<string[]>(() => {
+    const saved = localStorage.getItem("sollar_linked_wallets");
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    if (publicKey) {
+      const addr = publicKey.toBase58();
+      if (!linkedWallets.includes(addr)) {
+        setLinkedWallets(prev => [...prev, addr]);
+      }
+      setWalletAddress(addr);
+    }
+  }, [publicKey, linkedWallets]);
+
   // Request Payment State
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState<"USD" | "SOL">("USD");
@@ -57,11 +85,46 @@ export default function App() {
     }
   }, [walletAddress]);
 
-  const [linkedWallets, setLinkedWallets] = useState<string[]>(() => {
-    const saved = localStorage.getItem("sollar_linked_wallets");
-    return saved ? JSON.parse(saved) : [];
-  });
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
+
+  // Back Button Handling Logic
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      if (isSidebarOpen) {
+        setIsSidebarOpen(false);
+        // Prevent default back behavior by pushing state back if we want to stay on dashboard
+        // But wait, the browser already popped. We just need to ensure we don't exit the app.
+        window.history.pushState({ main: true }, "");
+      } else if (isWalletModalOpen) {
+        setIsWalletModalOpen(false);
+        window.history.pushState({ main: true }, "");
+      } else if (activeView !== "dashboard") {
+        setActiveView("dashboard");
+        window.history.pushState({ main: true }, "");
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+
+    // Initial push to enable back button handling
+    if (window.history.state === null) {
+      window.history.pushState({ main: true }, "");
+    }
+
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [isSidebarOpen, isWalletModalOpen, activeView]);
+
+  // Push state when overlays open or view changes to "catch" the back button
+  useEffect(() => {
+    if (isSidebarOpen || isWalletModalOpen || activeView !== "dashboard") {
+      // If we are entering an overlay/view, we push a state so the next 'back' pops it
+      // instead of exiting the app.
+      // We check if the current state is already an overlay to avoid double pushing
+      if (window.history.state?.overlay !== true) {
+        window.history.pushState({ overlay: true }, "");
+      }
+    }
+  }, [isSidebarOpen, isWalletModalOpen, activeView]);
 
   useEffect(() => {
     localStorage.setItem("sollar_linked_wallets", JSON.stringify(linkedWallets));
@@ -303,59 +366,60 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="space-y-3 mb-8 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                        {linkedWallets.length === 0 ? (
-                          <div className="text-center py-8 px-4 bg-yellow-50/50 rounded-2xl border border-dashed border-yellow-200">
-                            <Wallet className="text-yellow-300 w-10 h-10 mx-auto mb-3" />
-                            <p className="text-sm text-gray-500">No wallets linked yet</p>
-                          </div>
-                        ) : (
-                          linkedWallets.map((addr) => (
-                            <div 
-                              key={addr}
-                              onClick={() => setWalletAddress(addr)}
-                              className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between group ${walletAddress === addr ? 'border-yellow-400 bg-yellow-50' : 'border-yellow-50 bg-white hover:border-yellow-200'}`}
-                            >
-                              <div className="flex items-center space-x-3">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${walletAddress === addr ? 'bg-yellow-400 text-white' : 'bg-yellow-100 text-yellow-600'}`}>
-                                  <Zap size={14} />
-                                </div>
-                                <span className="text-sm font-mono text-gray-600">
-                                  {addr.slice(0, 6)}...{addr.slice(-6)}
-                                </span>
-                              </div>
-                              <div className="flex items-center space-x-2">
-                                {walletAddress === addr && <Check size={18} className="text-yellow-500" />}
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRemoveWallet(addr);
-                                  }}
-                                  className="p-1.5 text-gray-300 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
+                      <div className="space-y-4 mb-8">
+                        <div className="flex flex-col items-center justify-center p-6 bg-yellow-50/50 rounded-3xl border border-dashed border-yellow-200">
+                          <p className="text-xs text-gray-400 uppercase tracking-widest mb-4">Connect Wallet</p>
+                          <WalletMultiButton className="!bg-yellow-400 !rounded-2xl !h-14 !px-8 !font-medium !transition-all hover:!bg-yellow-500 !shadow-lg !shadow-yellow-100" />
+                        </div>
 
-                      <button
-                        onClick={handleLinkWallet}
-                        className="w-full py-4 bg-yellow-400 text-white font-medium rounded-2xl shadow-lg shadow-yellow-100 hover:bg-yellow-500 transition-all flex items-center justify-center space-x-2 active:scale-[0.98]"
-                      >
-                        <Plus size={20} />
-                        <span>Link New Wallet</span>
-                      </button>
+                        <div className="space-y-3 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                          {linkedWallets.length === 0 ? (
+                            <div className="text-center py-6 px-4">
+                              <p className="text-sm text-gray-400">No wallets linked yet</p>
+                            </div>
+                          ) : (
+                            linkedWallets.map((addr) => (
+                              <div 
+                                key={addr}
+                                onClick={() => setWalletAddress(addr)}
+                                className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between group ${walletAddress === addr ? 'border-yellow-400 bg-yellow-50' : 'border-yellow-50 bg-white hover:border-yellow-200'}`}
+                              >
+                                <div className="flex items-center space-x-3">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${walletAddress === addr ? 'bg-yellow-400 text-white' : 'bg-yellow-100 text-yellow-600'}`}>
+                                    <Zap size={14} />
+                                  </div>
+                                  <span className="text-sm font-mono text-gray-600">
+                                    {addr.slice(0, 6)}...{addr.slice(-6)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  {walletAddress === addr && <Check size={18} className="text-yellow-500" />}
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveWallet(addr);
+                                    }}
+                                    className="p-1.5 text-gray-300 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
                       
                       {walletAddress && (
                         <button
-                          onClick={() => {
+                          onClick={async () => {
+                            if (publicKey && walletAddress === publicKey.toBase58()) {
+                              await disconnect();
+                            }
                             setWalletAddress(null);
                             setIsWalletModalOpen(false);
                           }}
-                          className="w-full mt-3 py-3 text-sm text-gray-400 hover:text-red-500 transition-colors font-medium"
+                          className="w-full py-3 text-sm text-gray-400 hover:text-red-500 transition-colors font-medium"
                         >
                           Disconnect Current
                         </button>
@@ -597,5 +661,24 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+export default function App() {
+  const network = WalletAdapterNetwork.Devnet;
+  const endpoint = useMemo(() => clusterApiUrl(network), [network]);
+  const wallets = useMemo(() => [
+    new PhantomWalletAdapter(),
+    new SolflareWalletAdapter(),
+  ], [network]);
+
+  return (
+    <ConnectionProvider endpoint={endpoint}>
+      <WalletProvider wallets={wallets} autoConnect>
+        <WalletModalProvider>
+          <SollarApp />
+        </WalletModalProvider>
+      </WalletProvider>
+    </ConnectionProvider>
   );
 }
