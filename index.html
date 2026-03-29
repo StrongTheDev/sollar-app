@@ -7,6 +7,26 @@
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#facc15" />
     <link rel="apple-touch-icon" href="https://picsum.photos/seed/sollar-icon/192/192" />
+    <script>
+      // Safe-guard for 'fetch' property to prevent "getter-only" errors
+      // Some libraries try to polyfill fetch by assignment, which fails in this environment.
+      if (typeof window !== 'undefined' && window.fetch) {
+        const nativeFetch = window.fetch;
+        try {
+          Object.defineProperty(window, 'fetch', {
+            get() { return nativeFetch; },
+            set(v) { console.warn('Attempted to overwrite fetch, ignoring.'); },
+            configurable: true
+          });
+        } catch (e) {
+          console.warn('Could not lock fetch property, but it exists.');
+        }
+      }
+      
+      // Provide globals needed by Solana libraries
+      window.global = window;
+      window.process = { env: {} };
+    </script>
   </head>
   <body>
     <div id="root"></div>

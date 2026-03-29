@@ -12,12 +12,32 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the profile was created." }
       },
       "required": ["uid", "email"]
+    },
+    "transactions": {
+      "title": "Transaction Record",
+      "description": "Stores details of a Solana payment transaction.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique transaction ID." },
+        "uid": { "type": "string", "description": "User ID who initiated the transaction." },
+        "type": { "type": "string", "enum": ["send", "receive"], "description": "Type of transaction." },
+        "amount": { "type": "string", "description": "Amount of the transaction." },
+        "currency": { "type": "string", "enum": ["SOL", "USD"], "description": "Currency used." },
+        "date": { "type": "string", "format": "date-time", "description": "Timestamp of the transaction." },
+        "address": { "type": "string", "description": "Recipient or sender address." },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed"], "description": "Status of the transaction." }
+      },
+      "required": ["id", "uid", "type", "amount", "currency", "date", "address", "status"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "users",
       "description": "Individual user profile documents."
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "transactions",
+      "description": "Transaction history for a specific user."
     }
   }
 }

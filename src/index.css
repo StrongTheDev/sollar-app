@@ -121,3 +121,27 @@
 .wallet-adapter-modal-button-close svg {
   fill: #a1a1aa !important;
 }
+
+/* Dark Mode Overrides for Solana Wallet Adapter */
+.dark .wallet-adapter-modal-wrapper {
+  background-color: #030712 !important; /* gray-950 */
+  color: white !important;
+}
+
+.dark .wallet-adapter-modal-title {
+  color: white !important;
+}
+
+.dark .wallet-adapter-modal-list .wallet-adapter-button {
+  background-color: #111827 !important; /* gray-900 */
+  color: #facc15 !important;
+  border: 1px solid #1e293b !important;
+}
+
+.dark .wallet-adapter-modal-list .wallet-adapter-button:hover {
+  background-color: #1f2937 !important; /* gray-800 */
+}
+
+.dark .wallet-adapter-modal-button-close {
+  background-color: #111827 !important;
+}

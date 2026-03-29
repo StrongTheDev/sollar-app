@@ -22,6 +22,24 @@ service cloud.firestore {
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
       allow update: if isOwner(userId) && isValidUser(request.resource.data);
       allow delete: if false; // Profiles shouldn't be deleted by users directly
+
+      // Transactions
+      match /transactions/{transactionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidTransaction(request.resource.data);
+        allow update: if isOwner(userId) && isValidTransaction(request.resource.data);
+        allow delete: if false;
+      }
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['id', 'uid', 'type', 'amount', 'currency', 'date', 'address', 'status']) &&
+             data.id is string &&
+             data.uid == request.auth.uid &&
+             data.type in ['send', 'receive'] &&
+             data.amount is string &&
+             data.currency in ['SOL', 'USD'] &&
+             data.status in ['pending', 'completed', 'failed'];
     }
   }
 }
